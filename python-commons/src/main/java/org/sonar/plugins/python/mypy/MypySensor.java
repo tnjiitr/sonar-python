@@ -54,6 +54,9 @@ public class MypySensor extends ExternalIssuesSensor {
   private static final Pattern PATTERN = Pattern
     .compile(String.format("^(?<file>[^:]+):%s%s: (?<severity>\\S+[^:]): (?<message>.*?)(?: \\[(?<code>[^\\]]+)])?\\s*$", START_LOCATION, END_LOCATION));
 
+  // Pattern to detect lines that start with a mypy file location (not continuation lines)
+  private static final Pattern FILE_LOCATION_PATTERN = Pattern.compile("^[^:]+:\\d+:");
+
   @Override
   protected void importReport(File reportPath, SensorContext context, Set<String> unresolvedInputFiles) throws IOException {
     List<TextReportReader.Issue> issues = parse(reportPath, context.fileSystem());
@@ -61,16 +64,40 @@ public class MypySensor extends ExternalIssuesSensor {
   }
 
   private static List<TextReportReader.Issue> parse(File report, FileSystem fileSystem) throws IOException {
+    List<String> joinedLines = joinContinuationLines(report, fileSystem);
     List<TextReportReader.Issue> issues = new ArrayList<>();
-    try (Scanner scanner = new Scanner(report.toPath(), fileSystem.encoding().name())) {
-      while (scanner.hasNextLine()) {
-        TextReportReader.Issue issue = parseLine(scanner.nextLine());
-        if (issue != null) {
-          issues.add(issue);
-        }
+    for (String line : joinedLines) {
+      TextReportReader.Issue issue = parseLine(line);
+      if (issue != null) {
+        issues.add(issue);
       }
     }
     return issues;
+  }
+
+  /**
+   * Pre-processes a mypy report file to join continuation lines caused by terminal wrapping.
+   * A continuation line is any non-empty line that does NOT start with a file location pattern
+   * (e.g., 'path/to/file.py:123:'). Such lines are appended to the previous line with a space separator.
+   */
+  static List<String> joinContinuationLines(File report, FileSystem fileSystem) throws IOException {
+    List<String> joinedLines = new ArrayList<>();
+    try (Scanner scanner = new Scanner(report.toPath(), fileSystem.encoding().name())) {
+      while (scanner.hasNextLine()) {
+        String line = scanner.nextLine();
+        if (line.isEmpty()) {
+          continue;
+        }
+        if (FILE_LOCATION_PATTERN.matcher(line).find() || joinedLines.isEmpty()) {
+          joinedLines.add(line);
+        } else {
+          // Continuation line: append to previous line with a space separator
+          int lastIndex = joinedLines.size() - 1;
+          joinedLines.set(lastIndex, joinedLines.get(lastIndex) + " " + line.trim());
+        }
+      }
+    }
+    return joinedLines;
   }
 
   private static TextReportReader.Issue parseLine(String line) {
