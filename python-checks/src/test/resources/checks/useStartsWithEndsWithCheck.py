@@ -51,16 +51,16 @@ def f():
   notastring[:3] == [1, 2, 3] # Compliant: The rule should apply to strings only
   notastring[3:] == [4, 5, 6] # Compliant: The rule should apply to strings only
 
-  # We should definitely also detect the cases with too small / large slices
-  foobar[:2] == 'foo' # Noncompliant
-  foobar[:10] == 'foo' # Noncompliant
+  # Mismatched slice bounds should not be flagged: the replacement with startswith/endswith changes semantics
+  foobar[:2] == 'foo' # Compliant: slice bound (2) != comparator length (3), so startswith('foo') gives different result
+  foobar[:10] == 'foo' # Compliant: slice bound (10) != comparator length (3), so startswith('foo') gives different result
   foobar[2:] == 'bar' # Noncompliant
   foobar[10:] == 'bar' # Noncompliant
 
   foobar[3:6:1] == 'bar' # Compliant: Too much potential for FPs with step sizes != 1, too early stop indices, etc.
   foobar[3:6:0x1] == 'bar' # Same
   foobar[-3:] == 'bar' # Noncompliant {{Use `endswith` here.}}
-  foobar[:-3] == 'foo' # Noncompliant {{Use `startswith` here.}}
+  foobar[:-3] == 'foo' # Compliant: negative upper bound in prefix slice means [:-n] removes last n chars, not equivalent to startswith
 
   # If an index is not a plain number, we can not say for sure if it is negative/positive. Hence, we should suggest startswith and endswith
   foobar[:unknownA()] == 'foo' # Noncompliant {{Use `startswith` here.}}

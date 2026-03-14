@@ -26,7 +26,9 @@ import org.sonar.plugins.python.api.tree.Expression;
 import org.sonar.plugins.python.api.tree.NumericLiteral;
 import org.sonar.plugins.python.api.tree.SliceExpression;
 import org.sonar.plugins.python.api.tree.SliceItem;
+import org.sonar.plugins.python.api.tree.StringLiteral;
 import org.sonar.plugins.python.api.tree.Tree;
+import org.sonar.plugins.python.api.tree.UnaryExpression;
 import org.sonar.plugins.python.api.types.BuiltinTypes;
 
 import static org.sonar.plugins.python.api.tree.Tree.Kind.COMPARISON;
@@ -91,6 +93,12 @@ public class UseStartsWithEndsWithCheck extends PythonSubscriptionCheck {
 
     var sliceType = SliceType.fromSliceItem((SliceItem) sliceItem);
 
+    // Avoid false positives: when the slice bound is a known value that does not match
+    // the comparator string length, the replacement with startswith/endswith changes semantics.
+    if (sliceBoundMismatchesComparator(sliceType, (SliceItem) sliceItem, stringExpression)) {
+      return;
+    }
+
     var message = selectMessage(sliceType, operatorType);
     if (message == null) {
       return;
@@ -107,6 +115,101 @@ public class UseStartsWithEndsWithCheck extends PythonSubscriptionCheck {
     }
 
     return operatorMap.get(operatorType);
+  }
+
+  /**
+   * Returns true if the slice bound is a known value that does not match the comparator
+   * string length, meaning the replacement with startswith/endswith would change semantics.
+   *
+   * For PREFIX slices ([:x] == comparator):
+   * - If x is negative (e.g., [:-3]), the slice removes the last |x| characters,
+   *   which is NOT equivalent to startswith(comparator). Always a mismatch.
+   * - If x is a positive numeric literal and comparator is a string literal,
+   *   check that x == len(comparator). If not, it's a mismatch.
+   *
+   * For SUFFIX slices ([x:] == comparator):
+   * - If x is a negative numeric literal (e.g., [-3:]) and comparator is a string literal,
+   *   check that |x| == len(comparator). If not, it's a mismatch.
+   * - If x is a positive numeric literal and comparator is a string literal,
+   *   we cannot validate without knowing the sliced string's length, so we skip the check.
+   */
+  private static boolean sliceBoundMismatchesComparator(SliceType sliceType, SliceItem sliceItem, Expression stringExpression) {
+    var comparatorLength = getStringLiteralLength(stringExpression);
+
+    if (sliceType == SliceType.PREFIX) {
+      var upperBound = sliceItem.upperBound();
+      if (upperBound == null) {
+        return false;
+      }
+      // Negative numeric literal upper bound: [:-n] removes last n chars, never equivalent to startswith
+      if (isNegativeNumericLiteral(upperBound)) {
+        return true;
+      }
+      // Positive numeric literal upper bound: [:n] takes first n chars
+      // Only equivalent to startswith if n == len(comparator)
+      if (comparatorLength >= 0 && upperBound.is(Tree.Kind.NUMERIC_LITERAL) &&
+        upperBound.type().mustBeOrExtend(BuiltinTypes.INT)) {
+        var sliceBound = ((NumericLiteral) upperBound).valueAsLong();
+        return sliceBound != comparatorLength;
+      }
+    }
+
+    if (sliceType == SliceType.SUFFIX) {
+      var lowerBound = sliceItem.lowerBound();
+      if (lowerBound == null) {
+        return false;
+      }
+      // Negative lower bound: [-n:] takes last n chars
+      // Only equivalent to endswith if n == len(comparator)
+      var negativeValue = getNegativeValue(lowerBound);
+      if (negativeValue != null && comparatorLength >= 0) {
+        return negativeValue != comparatorLength;
+      }
+      // Positive numeric literal lower bound: [n:] takes chars from index n to end.
+      // We keep the existing behavior and suggest endswith as an idiomatic alternative.
+    }
+
+    return false;
+  }
+
+  /**
+   * Returns the length of a string literal expression, or -1 if the expression
+   * is not a string literal.
+   */
+  private static int getStringLiteralLength(Expression expression) {
+    if (expression.is(Tree.Kind.STRING_LITERAL)) {
+      return ((StringLiteral) expression).trimmedQuotesValue().length();
+    }
+    return -1;
+  }
+
+  /**
+   * Returns true if the expression is a negative numeric literal (e.g., -3).
+   * Returns false for unary minus of non-literal expressions (e.g., -unknownA())
+   * since the runtime value might be positive.
+   */
+  private static boolean isNegativeNumericLiteral(Expression expression) {
+    if (expression.is(Tree.Kind.UNARY_MINUS)) {
+      var operand = ((UnaryExpression) expression).expression();
+      return operand.is(Tree.Kind.NUMERIC_LITERAL) && operand.type().mustBeOrExtend(BuiltinTypes.INT);
+    }
+    return false;
+  }
+
+  /**
+   * Returns the absolute value of a negative numeric literal expression,
+   * or null if the expression is not a negative numeric literal.
+   * For example, for -3, returns 3L.
+   */
+  @CheckForNull
+  private static Long getNegativeValue(Expression expression) {
+    if (expression.is(Tree.Kind.UNARY_MINUS)) {
+      var operand = ((UnaryExpression) expression).expression();
+      if (operand.is(Tree.Kind.NUMERIC_LITERAL) && operand.type().mustBeOrExtend(BuiltinTypes.INT)) {
+        return ((NumericLiteral) operand).valueAsLong();
+      }
+    }
+    return null;
   }
 
   private enum SliceType {
