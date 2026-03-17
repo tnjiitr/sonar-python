@@ -212,6 +212,93 @@ class MypySensorTest {
       .endsWith("...");
   }
 
+  /**
+   * Tests that line-wrapped mypy output (message split across two lines) is correctly parsed.
+   * Reproduces: https://community.sonarsource.com/t/bug-with-sonar-python-parsing-mypy-output/146368
+   *
+   * When terminal width causes mypy output to wrap, e.g.:
+   *   src/file.py:12: error: Function is missing a type
+   *   annotation for one or more arguments  [no-untyped-def]
+   *
+   * The current line-by-line regex parser fails to match these wrapped lines,
+   * resulting in lost issues.
+   */
+  @Test
+  void line_wrapped_mypy_output_should_parse_all_issues() throws IOException {
+    List<ExternalIssue> externalIssues = executeSensorImporting("mypy_output_line_wrapped.txt");
+
+    // BUG: The parser reads line-by-line and the regex cannot match lines where
+    // the message is split across multiple lines due to terminal wrapping.
+    // Currently only 3 out of 5 issues are parsed (the 2 unwrapped ones + the summary-less one).
+    // When fixed, all 5 issues should be parsed.
+    assertThat(externalIssues).hasSize(5);
+
+    assertIssue(externalIssues.get(0),
+      "arg-type",
+      "Argument 1 to \"greet_all\" has incompatible type \"List[int]\"; expected \"List[str]\"",
+      11, 0, 11, 15);
+    assertIssue(externalIssues.get(1),
+      "no-untyped-def",
+      "Function is missing a type annotation",
+      13, 0, 13, 21);
+    assertIssue(externalIssues.get(2),
+      "import",
+      "Cannot find implementation or library stub for module named \"unknown\"",
+      16, 0, 16, 27);
+    assertIssue(externalIssues.get(3),
+      "no-untyped-call",
+      "Call to untyped function \"no_type_hints\" in typed context",
+      19, 0, 19, 27);
+    assertIssue(externalIssues.get(4),
+      "unknown_mypy_rule",
+      "Unused \"type: ignore\" comment",
+      24, 0, 24, 49);
+  }
+
+  /**
+   * Tests that mypy output where the [code] tag wraps to the next line is correctly parsed.
+   * Reproduces: https://community.sonarsource.com/t/bug-with-sonar-python-parsing-mypy-output/146368
+   *
+   * When terminal width causes just the [code] portion to wrap, e.g.:
+   *   src/file.py:12: error: Argument 1 to "greet_all" has incompatible type "List[int]"; expected "List[str]"
+   *   [arg-type]
+   *
+   * The regex matches the first line but captures no error code (code group is null),
+   * causing a fallback to "unknown_mypy_rule" instead of the correct rule key.
+   */
+  @Test
+  void error_code_on_next_line_should_be_captured() throws IOException {
+    List<ExternalIssue> externalIssues = executeSensorImporting("mypy_output_code_on_next_line.txt");
+
+    // BUG: When the [code] wraps to the next line, the regex on the first line matches
+    // but the code group is null, so it falls back to "unknown_mypy_rule".
+    // When fixed, all 5 issues should have their correct rule IDs.
+    assertThat(externalIssues).hasSize(5);
+
+    // These issues have the [code] on a separate line — should still get the correct rule ID
+    assertIssue(externalIssues.get(0),
+      "arg-type",
+      "Argument 1 to \"greet_all\" has incompatible type \"List[int]\"; expected \"List[str]\"",
+      11, 0, 11, 15);
+    assertIssue(externalIssues.get(1),
+      "no-untyped-def",
+      "Function is missing a type annotation",
+      13, 0, 13, 21);
+    // This one is not wrapped, should work as before
+    assertIssue(externalIssues.get(2),
+      "import",
+      "Cannot find implementation or library stub for module named \"unknown\"",
+      16, 0, 16, 27);
+    assertIssue(externalIssues.get(3),
+      "no-untyped-call",
+      "Call to untyped function \"no_type_hints\" in typed context",
+      19, 0, 19, 27);
+    assertIssue(externalIssues.get(4),
+      "unknown_mypy_rule",
+      "Unused \"type: ignore\" comment",
+      24, 0, 24, 49);
+  }
+
   @Test
   void rule_id_longer_than_limit_is_skipped() throws IOException {
     List<ExternalIssue> externalIssues = executeSensorImporting("mypy_output_long_rule_id.txt");

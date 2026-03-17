@@ -54,6 +54,12 @@ public class MypySensor extends ExternalIssuesSensor {
   private static final Pattern PATTERN = Pattern
     .compile(String.format("^(?<file>[^:]+):%s%s: (?<severity>\\S+[^:]): (?<message>.*?)(?: \\[(?<code>[^\\]]+)])?\\s*$", START_LOCATION, END_LOCATION));
 
+  // Pattern to detect the start of a new mypy entry: file:line:
+  private static final Pattern NEW_ENTRY_PATTERN = Pattern.compile("^[^:]+:\\d+:");
+
+  // Pattern to detect mypy summary/status lines that should not be treated as continuations
+  private static final Pattern SUMMARY_PATTERN = Pattern.compile("^(Found \\d+ error|Success: no issues found)");
+
   @Override
   protected void importReport(File reportPath, SensorContext context, Set<String> unresolvedInputFiles) throws IOException {
     List<TextReportReader.Issue> issues = parse(reportPath, context.fileSystem());
@@ -63,8 +69,50 @@ public class MypySensor extends ExternalIssuesSensor {
   private static List<TextReportReader.Issue> parse(File report, FileSystem fileSystem) throws IOException {
     List<TextReportReader.Issue> issues = new ArrayList<>();
     try (Scanner scanner = new Scanner(report.toPath(), fileSystem.encoding().name())) {
+      String accumulatedLine = null;
       while (scanner.hasNextLine()) {
-        TextReportReader.Issue issue = parseLine(scanner.nextLine());
+        String currentLine = scanner.nextLine();
+        if (currentLine.isEmpty()) {
+          // Process any accumulated line before skipping the empty line
+          if (accumulatedLine != null) {
+            TextReportReader.Issue issue = parseLine(accumulatedLine);
+            if (issue != null) {
+              issues.add(issue);
+            }
+            accumulatedLine = null;
+          }
+          continue;
+        }
+        if (NEW_ENTRY_PATTERN.matcher(currentLine).find()) {
+          // This looks like a new mypy entry; process any previously accumulated line first
+          if (accumulatedLine != null) {
+            TextReportReader.Issue issue = parseLine(accumulatedLine);
+            if (issue != null) {
+              issues.add(issue);
+            }
+          }
+          accumulatedLine = currentLine;
+        } else if (SUMMARY_PATTERN.matcher(currentLine).find()) {
+          // Summary/status line: flush any accumulated line, then handle independently
+          if (accumulatedLine != null) {
+            TextReportReader.Issue issue = parseLine(accumulatedLine);
+            if (issue != null) {
+              issues.add(issue);
+            }
+            accumulatedLine = null;
+          }
+          parseLine(currentLine);
+        } else if (accumulatedLine != null) {
+          // Continuation line: append to the accumulated line with a space
+          accumulatedLine = accumulatedLine + " " + currentLine.trim();
+        } else {
+          // Non-entry line with no prior accumulation (e.g., summary line)
+          parseLine(currentLine);
+        }
+      }
+      // Process the last accumulated line
+      if (accumulatedLine != null) {
+        TextReportReader.Issue issue = parseLine(accumulatedLine);
         if (issue != null) {
           issues.add(issue);
         }
