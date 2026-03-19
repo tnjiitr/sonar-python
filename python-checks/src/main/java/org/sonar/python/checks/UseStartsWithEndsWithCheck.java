@@ -40,6 +40,7 @@ public class UseStartsWithEndsWithCheck extends PythonSubscriptionCheck {
   private static final String USE_NOT_STARTSWITH_MESSAGE = "Use `not` and `startswith` here.";
   private static final String USE_ENDSWITH_MESSAGE = "Use `endswith` here.";
   private static final String USE_NOT_ENDSWITH_MESSAGE = "Use `not` and `endswith` here.";
+  private static final int NOT_A_STRING_LITERAL = -1;
   private static final Map<SliceType, Map<OperatorType, String>> MESSAGES = Map.of(
     SliceType.PREFIX, Map.of(
       OperatorType.EQUALS, USE_STARTSWITH_MESSAGE,
@@ -147,8 +148,9 @@ public class UseStartsWithEndsWithCheck extends PythonSubscriptionCheck {
       }
       // Positive numeric literal upper bound: [:n] takes first n chars
       // Only equivalent to startswith if n == len(comparator)
-      if (comparatorLength >= 0 && upperBound.is(Tree.Kind.NUMERIC_LITERAL) &&
-        upperBound.type().mustBeOrExtend(BuiltinTypes.INT)) {
+      if ((comparatorLength != NOT_A_STRING_LITERAL)
+        && upperBound.is(Tree.Kind.NUMERIC_LITERAL)
+        && upperBound.type().mustBeOrExtend(BuiltinTypes.INT)) {
         var sliceBound = ((NumericLiteral) upperBound).valueAsLong();
         return sliceBound != comparatorLength;
       }
@@ -162,7 +164,7 @@ public class UseStartsWithEndsWithCheck extends PythonSubscriptionCheck {
       // Negative lower bound: [-n:] takes last n chars
       // Only equivalent to endswith if n == len(comparator)
       var negativeValue = getNegativeValue(lowerBound);
-      if (negativeValue != null && comparatorLength >= 0) {
+      if ((negativeValue != null) && (comparatorLength != NOT_A_STRING_LITERAL)) {
         return negativeValue != comparatorLength;
       }
       // Positive numeric literal lower bound: [n:] takes chars from index n to end.
@@ -173,14 +175,14 @@ public class UseStartsWithEndsWithCheck extends PythonSubscriptionCheck {
   }
 
   /**
-   * Returns the length of a string literal expression, or -1 if the expression
-   * is not a string literal.
+   * Returns the length of a string literal expression, or {@link #NOT_A_STRING_LITERAL}
+   * if the expression is not a string literal.
    */
   private static int getStringLiteralLength(Expression expression) {
     if (expression.is(Tree.Kind.STRING_LITERAL)) {
       return ((StringLiteral) expression).trimmedQuotesValue().length();
     }
-    return -1;
+    return NOT_A_STRING_LITERAL;
   }
 
   /**
@@ -191,7 +193,8 @@ public class UseStartsWithEndsWithCheck extends PythonSubscriptionCheck {
   private static boolean isNegativeNumericLiteral(Expression expression) {
     if (expression.is(Tree.Kind.UNARY_MINUS)) {
       var operand = ((UnaryExpression) expression).expression();
-      return operand.is(Tree.Kind.NUMERIC_LITERAL) && operand.type().mustBeOrExtend(BuiltinTypes.INT);
+      return operand.is(Tree.Kind.NUMERIC_LITERAL)
+        && operand.type().mustBeOrExtend(BuiltinTypes.INT);
     }
     return false;
   }
@@ -205,7 +208,8 @@ public class UseStartsWithEndsWithCheck extends PythonSubscriptionCheck {
   private static Long getNegativeValue(Expression expression) {
     if (expression.is(Tree.Kind.UNARY_MINUS)) {
       var operand = ((UnaryExpression) expression).expression();
-      if (operand.is(Tree.Kind.NUMERIC_LITERAL) && operand.type().mustBeOrExtend(BuiltinTypes.INT)) {
+      if (operand.is(Tree.Kind.NUMERIC_LITERAL)
+        && operand.type().mustBeOrExtend(BuiltinTypes.INT)) {
         return ((NumericLiteral) operand).valueAsLong();
       }
     }
