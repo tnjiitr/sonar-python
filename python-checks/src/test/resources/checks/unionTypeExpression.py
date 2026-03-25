@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Annotated, Union
 from typing import Union as u
 import typing
 import typing as t
@@ -65,4 +65,54 @@ def unknown_return_type() -> unknown:
     pass
 
 def unknown_return_type_subscript() -> unknown[int, str]:
+    pass
+
+
+# Compliant: Union pipe syntax inside Annotated should NOT trigger S6546
+# Bug: https://community.sonarsource.com/t/false-positive-for-python-s6546/179644
+
+class Depends:
+    def __init__(self, func):
+        self.func = func
+
+class ClassC:
+    pass
+
+class ClassD:
+    pass
+
+def get_dep():
+    return "dep"
+
+# Compliant - union pipe syntax already used inside single-line Annotated
+def annotated_union_pipe_single_line(param: Annotated[int | str, "metadata"]):
+    pass
+
+# Compliant - union pipe syntax already used inside multi-line Annotated (THE BUG)
+def annotated_union_pipe_multiline(
+    new_class: Annotated[
+        ClassC | ClassD, Depends(get_dep)
+    ],
+):
+    pass
+
+# Compliant - union pipe in return type inside Annotated
+def annotated_union_pipe_return() -> Annotated[
+    int | str,
+    "metadata"
+]:
+    pass
+
+# Compliant - variable annotation with union pipe inside Annotated
+annotated_var: Annotated[
+    int | str,
+    "metadata"
+]
+
+# Compliant - union pipe with None inside Annotated
+def annotated_optional(param: Annotated[int | None, "optional"]):
+    pass
+
+# Compliant - multiple union pipe types inside Annotated
+def annotated_multi_union(param: Annotated[int | str | float, "multi"]):
     pass
